@@ -1,0 +1,38 @@
+Stopping any existing servers...
+Starting Flask server on port 5003...
+ * Serving Flask app 'app.py' (lazy loading)
+ * Environment: development
+ * Debug mode: on
+Starting React development server on port 3003...
+
+> wellness-hub-client@0.1.0 start
+> react-scripts start
+
+Starting the development server...
+
+Opening demo in browser...
+Demo is running!
+- Frontend: http://localhost:3003
+- Backend: http://localhost:5003
+- Analytics: http://localhost:5003/api/analytics/results
+
+Press Ctrl+C to stop all servers
+Compiled successfully!
+
+You can now view wellness-hub-client in the browser.
+
+  Local:            http://localhost:3003
+  On Your Network:  http://192.168.86.28:3003
+
+Note that the development build is not optimized.
+To create a production build, use npm run build.
+
+webpack compiled successfully
+Files successfully emitted, waiting for typecheck results...
+Issues checking in progress...
+No issues found.
+Stopping servers...
+Stopping demo servers...
+- Flask server was not running
+- React development server stopped
+All servers stopped successfully!

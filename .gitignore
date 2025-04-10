@@ -1,0 +1,53 @@
+# dependencies
+/node_modules
+/client/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/build
+/client/build
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+server/myenv/
+
+# misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env
+/server/.env
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# pid files
+.flask_pid
+.react_pid
