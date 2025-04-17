@@ -18,6 +18,10 @@ from mock_data import (
 from ldclient import LDClient, Config, Context
 from ldai.client import LDAIClient, AIConfig, ModelConfig, LDMessage
 
+# Import our new client classes
+from ld_client import LaunchDarklyClient
+from bedrock_client import BedrockClient, create_bedrock_message, create_claude_message
+
 # Try to import boto3, but don't fail if it's not available
 try:
     import boto3
@@ -29,6 +33,8 @@ except ImportError:
 # Load environment variables
 load_dotenv()
 
+# Keep the original LaunchDarklyManager for backward compatibility
+# This will be gradually phased out as we migrate to the new LaunchDarklyClient
 class LaunchDarklyManager:
     def __init__(self, sdk_key):
         config = Config(sdk_key)
@@ -146,10 +152,30 @@ if not sdk_key:
     print("Warning: LAUNCHDARKLY_SDK_KEY environment variable not found. Using dummy key.")
     sdk_key = "sdk-key-123456789"  # Dummy key for development
 
-# Initialize LaunchDarkly client
+# Initialize LaunchDarkly clients - both old and new
 ld_manager = LaunchDarklyManager(sdk_key)
+ld_client = LaunchDarklyClient(sdk_key, ai_config_id="guru-guide-ai")
 
-# Initialize AWS Bedrock client (for the chatbot)
+# Initialize AWS Bedrock client using our new BedrockClient class
+bedrock_client = None
+if BOTO3_AVAILABLE:
+    aws_region = os.getenv('AWS_REGION', 'us-east-1')  # Default to us-east-1 if not specified
+    aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+
+    if aws_access_key and aws_secret_key:
+        bedrock_client = BedrockClient(
+            region_name=aws_region,
+            access_key_id=aws_access_key,
+            secret_access_key=aws_secret_key
+        )
+        print("AWS Bedrock client initialized successfully")
+    else:
+        print("Warning: AWS credentials not found. Chatbot will use mock responses.")
+else:
+    print("Warning: boto3 is not available. Chatbot will use mock responses.")
+
+# Keep the original bedrock_runtime for backward compatibility
 bedrock_runtime = None
 if BOTO3_AVAILABLE:
     aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
@@ -163,11 +189,7 @@ if BOTO3_AVAILABLE:
             aws_access_key_id=aws_access_key,
             aws_secret_access_key=aws_secret_key
         )
-        print("AWS Bedrock client initialized successfully")
-    else:
-        print("Warning: AWS credentials not found. Chatbot will use mock responses.")
-else:
-    print("Warning: boto3 is not available. Chatbot will use mock responses.")
+        print("Original AWS Bedrock client initialized for backward compatibility")
 
 # Initialize LaunchDarkly AI client
 ldai_client = LDAIClient(ld_manager.client)
@@ -466,13 +488,76 @@ def chatbot_message():
                 user_message = msg.get("content")
                 break
         
-        # Get AI Config from LaunchDarkly
-        ai_config = ld_manager.get_ai_config(user_context)
-        print(f"Using AI Config from LaunchDarkly: {ai_config}")
-        
-        # If AWS Bedrock is configured, use it
-        if BOTO3_AVAILABLE and bedrock_runtime:
+        # If AWS Bedrock is configured, use it with our new client classes
+        if BOTO3_AVAILABLE and bedrock_client:
             try:
+                # Create variables for LaunchDarkly AI Config
+                variables = {
+                    "user_input": user_message,
+                    "conversation_history": messages
+                }
+                
+                # Get AI Config from LaunchDarkly using our new client
+                config, tracker = ld_client.get_ai_config(user_context, variables)
+                
+                # Extract model configuration
+                model_id = config.model.name
+                
+                # Extract parameters from model config
+                params = config.model._parameters
+                inference_config = {
+                    "temperature": params.get("temperature", 0.7),
+                    "maxTokens": params.get("max_tokens", 1000),
+                    "topP": params.get("top_p", 0.9)
+                }
+                
+                # Extract system prompt from messages
+                system_prompts = []
+                if config.messages and len(config.messages) > 0:
+                    for msg in config.messages:
+                        if msg.role == "system":
+                            system_prompts.append({"text": msg.content})
+                
+                # If no system prompt found, use a default
+                if not system_prompts:
+                    system_prompts = [{
+                        "text": "You are a wellness assistant for a health and wellness platform. Provide helpful, friendly advice about wellness services, fitness, meditation, and healthy living. Keep responses concise and positive."
+                    }]
+                
+                # Format messages based on model type
+                if "amazon" in model_id.lower():
+                    # Use Bedrock format for Amazon models
+                    bedrock_messages = create_bedrock_message(messages, user_message)
+                else:
+                    # Use Claude format for Claude models
+                    bedrock_messages = create_claude_message(messages, user_message)
+                
+                # Stream the conversation using our new client
+                stream = bedrock_client.stream_conversation(
+                    model_id=model_id,
+                    messages=bedrock_messages,
+                    system_prompts=system_prompts,
+                    inference_config=inference_config
+                )
+                
+                # Parse the stream and get the full response
+                full_response = bedrock_client.parse_stream(stream, tracker)
+                
+                return jsonify({
+                    "status": "success",
+                    "message": full_response
+                })
+                
+            except Exception as e:
+                error_str = str(e)
+                print(f"Error using new Bedrock client: {error_str}")
+                print(f"Falling back to original implementation...")
+                
+                # Fall back to the original implementation
+                # Get AI Config from LaunchDarkly
+                ai_config = ld_manager.get_ai_config(user_context)
+                print(f"Using AI Config from LaunchDarkly: {ai_config}")
+                
                 # Format messages for Claude
                 claude_messages = []
                 
@@ -712,7 +797,7 @@ Remember to breathe deeply and move slowly. It's not about how far you can stret
                         print(f"AWS Bedrock error: {error_str}")
                         print(f"Model ID: {model_id}")
                         print(f"AWS Region: {aws_region}")
-                        print(f"AWS Access Key ID: {aws_access_key[:5]}...{aws_access_key[-4:]}")
+                        print(f"AWS Access Key ID: {aws_access_key[:5]}...{aws_access_key[-4:] if aws_access_key else ''}")
                         print("Request body:", json.dumps(request_body, indent=2))
                         print("Falling back to mock response.")
                         
@@ -777,5 +862,6 @@ if __name__ == '__main__':
     try:
         app.run(debug=True, port=5003)
     finally:
-        # Ensure LaunchDarkly client is closed properly
+        # Ensure LaunchDarkly clients are closed properly
         ld_manager.close()
+        ld_client.close()
