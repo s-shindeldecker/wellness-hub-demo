@@ -227,7 +227,7 @@ class BedrockMetricsTracker:
         
         # Handle different response formats based on model
         if "amazon" in model_id.lower():
-            # Amazon Nova Lite format
+            # Amazon Nova Pro format
             if 'output' in response_body and 'message' in response_body['output'] and 'content' in response_body['output']['message']:
                 content = response_body['output']['message']['content']
                 if isinstance(content, list) and len(content) > 0 and 'text' in content[0]:

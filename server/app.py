@@ -675,18 +675,18 @@ def chatbot_message():
                 
                 # Create the request body based on the model type
                 if "amazon" in model_id.lower():
-                    # Amazon Nova Lite format for Converse API
-                    # Convert messages to the format expected by Amazon Nova Lite Converse API
+                    # Amazon Nova Pro format for Converse API
+                    # Convert messages to the format expected by Amazon Nova Pro Converse API
                     nova_messages = []
                     
-                    # For Amazon Nova Lite, we need to handle the system message differently
+                    # For Amazon Nova Pro, we need to handle the system message differently
                     # since it doesn't support the "system" role
                     
                     # Debug: Log the messages we're working with
-                    print(f"Original messages for Nova Lite: {claude_messages}")
+                    print(f"Original messages for Amazon model: {claude_messages}")
                     print(f"Persona message: {persona_message}")
                     
-                    # Create a new array for Nova Lite messages
+                    # Create a new array for Amazon model messages
                     nova_messages = []
                     
                     # First, check if we have a persona message
@@ -729,9 +729,9 @@ def chatbot_message():
                             })
                     
                     # Debug: Log the final messages we're sending
-                    print(f"Final Nova Lite messages: {nova_messages}")
+                    print(f"Final Amazon model messages: {nova_messages}")
                     
-                    print(f"Sending messages to Amazon Nova Lite: {json.dumps(nova_messages, indent=2)}")
+                    print(f"Sending messages to Amazon Nova Pro: {json.dumps(nova_messages, indent=2)}")
                     
                     # For Converse API
                     request_body = {
@@ -770,7 +770,7 @@ def chatbot_message():
                     
                     # Use the appropriate API call based on the model type
                     if "amazon" in model_id.lower():
-                        # Use converse API for Amazon Nova Lite
+                        # Use converse API for Amazon Nova Pro
                         # Make the API call
                         response = bedrock_runtime.converse(
                             modelId=model_id,
@@ -810,11 +810,11 @@ def chatbot_message():
                     print(f"Raw response from model: {response_body}")
                     
                     if "amazon" in model_id.lower():
-                        # Amazon Nova Lite response format
+                        # Amazon Nova Pro response format
                         if 'output' in response_body and 'message' in response_body['output'] and 'content' in response_body['output']['message']:
                             # New format with nested content
                             response_content = response_body['output']['message']['content'][0]['text']
-                            print(f"Successfully parsed response from Amazon Nova Lite: {response_content[:100]}...")
+                            print(f"Successfully parsed response from Amazon Nova Pro: {response_content[:100]}...")
                         elif 'output' in response_body:
                             # Alternative format
                             response_content = response_body.get('output', {}).get('text', '')
@@ -823,7 +823,7 @@ def chatbot_message():
                             response_content = response_body.get('results', [{}])[0].get('outputText', '')
                         else:
                             # Fallback to mock response if we can't parse the response
-                            print(f"Unable to parse response from Amazon Nova Lite: {response_body}")
+                            print(f"Unable to parse response from Amazon Nova Pro: {response_body}")
                             response_content = f"""
 As a wellness assistant, I'd be happy to suggest some yoga poses for beginners!
 
