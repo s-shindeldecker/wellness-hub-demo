@@ -598,7 +598,10 @@ def chatbot_message():
                 )
                 
                 # Parse the stream and get the full response
-                full_response = bedrock_client.parse_stream(stream, tracker)
+                # We need to fully consume the generator to get the complete response
+                full_response = ""
+                for chunk in bedrock_client.parse_stream(stream, tracker):
+                    full_response += chunk
                 
                 return jsonify({
                     "status": "success",
