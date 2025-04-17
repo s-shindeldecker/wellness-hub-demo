@@ -187,6 +187,36 @@ const Chatbot: React.FC = () => {
   // We'll always show the chatbot UI and let the server handle the flag check
   // The server will return an error message if the chatbot is disabled
   
+  // Handle feedback submission
+  const handleFeedbackSubmit = async (messageId: string, isPositive: boolean) => {
+    if (!chatbotService) {
+      console.error('Chatbot service not initialized');
+      return;
+    }
+    
+    console.log('Submitting feedback:', messageId, isPositive);
+    
+    try {
+      const success = await chatbotService.sendFeedback(messageId, isPositive);
+      
+      if (success) {
+        // Update the message in state to reflect feedback submission
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === messageId 
+              ? { ...msg, feedbackSubmitted: true, feedbackPositive: isPositive } 
+              : msg
+          )
+        );
+        console.log('Feedback submitted successfully');
+      } else {
+        console.error('Failed to submit feedback');
+      }
+    } catch (error) {
+      console.error('Error submitting feedback:', error);
+    }
+  };
+  
   return (
     <ChatbotContainer isOpen={isOpen}>
       {isOpen ? (
@@ -197,7 +227,11 @@ const Chatbot: React.FC = () => {
           </ChatHeader>
           <MessagesContainer>
             {messages.filter(msg => msg.role !== 'system').map(message => (
-              <ChatMessage key={message.id} message={message} />
+              <ChatMessage 
+                key={message.id} 
+                message={message} 
+                onFeedbackSubmit={handleFeedbackSubmit}
+              />
             ))}
             {isLoading && (
               <LoadingIndicator>Thinking...</LoadingIndicator>
