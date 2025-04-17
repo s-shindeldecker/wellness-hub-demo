@@ -8,6 +8,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  feedbackSubmitted?: boolean;
+  feedbackPositive?: boolean;
 }
 
 export class ChatbotService {
@@ -51,6 +53,36 @@ export class ChatbotService {
     } catch (error) {
       console.error('Error sending message to server:', error);
       return 'Sorry, there was an error processing your request. Please try again later.';
+    }
+  }
+  
+  // Send feedback for a message
+  async sendFeedback(messageId: string, isPositive: boolean): Promise<boolean> {
+    try {
+      // Use the current session ID
+      const userId = getAnonymousUserId();
+      console.log('Sending feedback for message:', messageId, 'isPositive:', isPositive);
+      
+      // Call the server endpoint
+      const response = await axios.post(`${this.apiUrl}/api/chatbot/feedback`, {
+        userId,
+        messageId,
+        isPositive
+      });
+      
+      console.log('Feedback response from server:', response.data);
+      
+      // Check if the response is successful
+      if (response.data.status === 'success') {
+        console.log('Feedback submitted successfully');
+        return true;
+      } else {
+        console.error('Error submitting feedback:', response.data.message);
+        return false;
+      }
+    } catch (error) {
+      console.error('Error sending feedback to server:', error);
+      return false;
     }
   }
 }
