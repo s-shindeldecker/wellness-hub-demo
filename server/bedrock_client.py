@@ -64,6 +64,9 @@ class BedrockClient:
         """
         logger.info(f"Streaming messages with model {model_id}")
         
+        # Ensure numeric parameters are properly converted to their respective types
+        inference_config = self._convert_numeric_params(inference_config)
+        
         # Prepare parameters based on model type
         if "amazon" in model_id.lower():
             # Amazon models use the converse_stream API
@@ -75,14 +78,17 @@ class BedrockClient:
             
             # Add system if provided and supported by the model
             if system_prompts and len(system_prompts) > 0:
-                # Extract text from system prompts
-                system_text = system_prompts[0].get('text', '')
-                if system_text:
-                    params['system'] = system_text
+                # For Amazon models, system must be a list of dictionaries
+                formatted_system_prompts = self._format_system_prompts(system_prompts)
+                if formatted_system_prompts:
+                    params['system'] = formatted_system_prompts
             
             # Add additional fields if provided
             if additional_model_fields:
                 params['additionalModelRequestFields'] = additional_model_fields
+            
+            # Log the parameters for debugging
+            logger.info(f"Amazon model parameters: {json.dumps(params, default=str)}")
             
             # Call the converse_stream API
             response = self.client.converse_stream(**params)
@@ -111,12 +117,93 @@ class BedrockClient:
             if additional_model_fields:
                 request_body.update(additional_model_fields)
             
+            # Log the request body for debugging
+            logger.info(f"Claude model request body: {json.dumps(request_body, default=str)}")
+            
             # Call the invoke_model_with_response_stream API
             response = self.client.invoke_model_with_response_stream(
                 modelId=model_id,
                 body=json.dumps(request_body)
             )
             return response.get('body')
+    
+    def _convert_numeric_params(self, inference_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert numeric parameters to their proper types.
+        
+        Args:
+            inference_config: The inference configuration
+            
+        Returns:
+            Updated inference configuration with proper types
+        """
+        # Create a copy to avoid modifying the original
+        config = inference_config.copy()
+        
+        # Convert temperature to float
+        if "temperature" in config:
+            if isinstance(config["temperature"], str):
+                try:
+                    config["temperature"] = float(config["temperature"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid temperature value: {config['temperature']}. Using default: 0.7")
+                    config["temperature"] = 0.7
+        
+        # Convert maxTokens to int
+        if "maxTokens" in config:
+            if isinstance(config["maxTokens"], str):
+                try:
+                    config["maxTokens"] = int(config["maxTokens"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid maxTokens value: {config['maxTokens']}. Using default: 1000")
+                    config["maxTokens"] = 1000
+        
+        # Convert topP to float
+        if "topP" in config:
+            if isinstance(config["topP"], str):
+                try:
+                    config["topP"] = float(config["topP"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid topP value: {config['topP']}. Using default: 0.9")
+                    config["topP"] = 0.9
+        
+        return config
+    
+    def _format_system_prompts(self, system_prompts: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """
+        Format system prompts for the Bedrock API.
+        
+        Args:
+            system_prompts: The system prompts to format
+            
+        Returns:
+            Formatted system prompts
+        """
+        formatted_prompts = []
+        
+        for prompt in system_prompts:
+            # If it's already a dict with a 'text' key, use it as is
+            if isinstance(prompt, dict) and "text" in prompt:
+                formatted_prompts.append(prompt)
+            # If it's a string, wrap it in a dict with a 'text' key
+            elif isinstance(prompt, str):
+                formatted_prompts.append({"text": prompt})
+            # If it's a dict without a 'text' key but with a 'content' key, convert it
+            elif isinstance(prompt, dict) and "content" in prompt:
+                formatted_prompts.append({"text": prompt["content"]})
+        
+        # If we have no formatted prompts but had input prompts, create a default one
+        if not formatted_prompts and system_prompts:
+            # Try to extract text from the first prompt in any format
+            if isinstance(system_prompts[0], dict):
+                for key in ["text", "content", "message"]:
+                    if key in system_prompts[0]:
+                        formatted_prompts.append({"text": system_prompts[0][key]})
+                        break
+            elif isinstance(system_prompts[0], str):
+                formatted_prompts.append({"text": system_prompts[0]})
+        
+        return formatted_prompts
 
     def parse_stream(self, stream, tracker=None) -> Generator[str, None, str]:
         """
