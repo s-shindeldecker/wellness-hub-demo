@@ -457,6 +457,63 @@ def get_chatbot_metrics():
         "metrics": all_metrics
     })
 
+@app.route('/api/chatbot/feedback', methods=['POST'])
+def submit_chatbot_feedback():
+    """
+    Endpoint for submitting feedback on chatbot responses.
+    This allows users to rate responses as helpful or not helpful.
+    """
+    try:
+        data = request.json
+        user_id = data.get('userId', 'default-user')
+        is_positive = data.get('isPositive', True)  # Default to positive if not specified
+        message_id = data.get('messageId')  # Optional message ID for tracking specific messages
+        
+        # Create user context for LaunchDarkly
+        user_context = create_user_context(user_id)
+        
+        # Get variables for LaunchDarkly AI Config
+        variables = {
+            "feedback": {
+                "is_positive": is_positive,
+                "message_id": message_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        }
+        
+        # Get AI Config and tracker from LaunchDarkly
+        config, tracker = ld_client.get_ai_config(user_context, variables)
+        
+        # Send feedback using our LaunchDarklyClient
+        if tracker:
+            ld_client.send_feedback(tracker, is_positive)
+            
+            # Store feedback in analytics data for reporting
+            analytics_data.append({
+                "type": "chatbot_feedback",
+                "userId": user_id,
+                "isPositive": is_positive,
+                "messageId": message_id,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            return jsonify({
+                "status": "success",
+                "message": f"Feedback {'positive' if is_positive else 'negative'} recorded successfully"
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Could not send feedback: tracker is None"
+            }), 400
+            
+    except Exception as e:
+        print(f"Error submitting feedback: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": f"Error submitting feedback: {str(e)}"
+        }), 500
+
 @app.route('/api/chatbot/message', methods=['POST'])
 def chatbot_message():
     """
