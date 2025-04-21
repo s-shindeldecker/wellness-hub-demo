@@ -440,6 +440,56 @@ def get_analytics():
     
     return jsonify(results)
 
+@app.route('/api/debug/ai-config', methods=['GET'])
+def debug_ai_config():
+    """
+    Debug endpoint to verify the AI configuration from LaunchDarkly
+    """
+    try:
+        # Get user ID from query params or use default
+        user_id = request.args.get('userId', 'default-user')
+        
+        # Create user context for LaunchDarkly
+        user_context = create_user_context(user_id)
+        
+        # Create variables for LaunchDarkly AI Config
+        variables = {
+            "user_input": "Debug request",
+            "conversation_history": []
+        }
+        
+        # Get AI Config from LaunchDarkly using our client
+        config, tracker = ld_client.get_ai_config(user_context, variables)
+        
+        # Format the config for display
+        formatted_config = {
+            "enabled": config.enabled,
+            "model": {
+                "name": config.model.name,
+                "parameters": config.model._parameters
+            },
+            "messages": []
+        }
+        
+        # Add messages
+        if config.messages:
+            for msg in config.messages:
+                formatted_config["messages"].append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+        
+        return jsonify({
+            "status": "success",
+            "config": formatted_config
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Error retrieving AI config: {str(e)}"
+        }), 500
+
 @app.route('/api/chatbot/metrics', methods=['GET'])
 def get_chatbot_metrics():
     """
@@ -517,22 +567,28 @@ def submit_chatbot_feedback():
 @app.route('/api/chatbot/message', methods=['POST'])
 def chatbot_message():
     """
-    Endpoint for the chatbot that uses LaunchDarkly flag
+    Endpoint for the chatbot that uses LaunchDarkly flag with enhanced logging
     """
     try:
         data = request.json
         user_id = data.get('userId', 'default-user')
         messages = data.get('messages', [])
         
+        print(f"Chatbot request received for user: {user_id}")
+        print(f"Messages received: {json.dumps(messages, default=str)}")
+        
         # Create user context for LaunchDarkly
         user_context = create_user_context(user_id)
+        print(f"Created user context: {user_context.key}, anonymous: {user_context.anonymous}")
         
         # Check if the chatbot is enabled via LaunchDarkly
-        chatbot_enabled = ld_manager.get_chatbot_enabled(user_context)
+        # Use the new client for consistency
+        chatbot_enabled = ld_client.ld_client.variation('guru-guide-ai-enabled', user_context, True)
         print(f"Chatbot enabled: {chatbot_enabled}")
         
         # If the chatbot is disabled, return an error
         if not chatbot_enabled:
+            print("Chatbot is disabled. Returning error.")
             return jsonify({
                 "status": "error",
                 "message": "Chatbot is currently disabled."
@@ -545,6 +601,8 @@ def chatbot_message():
                 user_message = msg.get("content")
                 break
         
+        print(f"Extracted user message: {user_message}")
+        
         # If AWS Bedrock is configured, use it with our new client classes
         if BOTO3_AVAILABLE and bedrock_client:
             try:
@@ -554,11 +612,25 @@ def chatbot_message():
                     "conversation_history": messages
                 }
                 
+                print(f"Getting AI config from LaunchDarkly with variables: {json.dumps(variables, default=str)}")
+                
                 # Get AI Config from LaunchDarkly using our new client
                 config, tracker = ld_client.get_ai_config(user_context, variables)
                 
+                print(f"AI Config received. Enabled: {config.enabled}")
+                print(f"Model: {config.model.name}")
+                
+                # Log all messages in the config for verification
+                if config.messages:
+                    print(f"Number of messages in config: {len(config.messages)}")
+                    for i, msg in enumerate(config.messages):
+                        print(f"Message {i+1}: Role={msg.role}, Content={msg.content[:100]}...")
+                else:
+                    print("No messages in config")
+                
                 # Extract model configuration
                 model_id = config.model.name
+                print(f"Using model ID: {model_id}")
                 
                 # Extract parameters from model config
                 params = config.model._parameters
@@ -568,28 +640,34 @@ def chatbot_message():
                     "topP": params.get("top_p", 0.9)
                 }
                 
+                print(f"Inference config: {json.dumps(inference_config, default=str)}")
+                
                 # Extract system prompt from messages
                 system_prompts = []
                 if config.messages and len(config.messages) > 0:
                     for msg in config.messages:
                         if msg.role == "system":
                             system_prompts.append({"text": msg.content})
+                            print(f"Found system prompt: {msg.content[:100]}...")
                 
                 # If no system prompt found, use a default
                 if not system_prompts:
-                    system_prompts = [{
-                        "text": "You are a wellness assistant for a health and wellness platform. Provide helpful, friendly advice about wellness services, fitness, meditation, and healthy living. Keep responses concise and positive."
-                    }]
+                    default_prompt = "You are a wellness assistant for a health and wellness platform. Provide helpful, friendly advice about wellness services, fitness, meditation, and healthy living. Keep responses concise and positive."
+                    system_prompts = [{"text": default_prompt}]
+                    print(f"No system prompt found. Using default: {default_prompt}")
                 
                 # Format messages based on model type
                 if "amazon" in model_id.lower():
                     # Use Bedrock format for Amazon models
                     bedrock_messages = create_bedrock_message(messages, user_message)
+                    print(f"Using Amazon format for messages. Count: {len(bedrock_messages)}")
                 else:
                     # Use Claude format for Claude models
                     bedrock_messages = create_claude_message(messages, user_message)
+                    print(f"Using Claude format for messages. Count: {len(bedrock_messages)}")
                 
                 # Stream the conversation using our new client
+                print(f"Streaming conversation with model: {model_id}")
                 stream = bedrock_client.stream_conversation(
                     model_id=model_id,
                     messages=bedrock_messages,
@@ -598,10 +676,13 @@ def chatbot_message():
                 )
                 
                 # Parse the stream and get the full response
-                # We need to fully consume the generator to get the complete response
+                print("Parsing response stream...")
                 full_response = ""
                 for chunk in bedrock_client.parse_stream(stream, tracker):
                     full_response += chunk
+                
+                print(f"Full response received. Length: {len(full_response)}")
+                print(f"Response preview: {full_response[:200]}...")
                 
                 return jsonify({
                     "status": "success",
@@ -610,7 +691,8 @@ def chatbot_message():
                 
             except Exception as e:
                 error_str = str(e)
-                print(f"Error using new Bedrock client: {error_str}")
+                print(f"Error using Bedrock client: {error_str}")
+                print(f"Traceback: {traceback.format_exc()}")
                 print(f"Falling back to original implementation...")
                 
                 # Fall back to the original implementation

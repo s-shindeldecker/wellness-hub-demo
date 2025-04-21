@@ -10,6 +10,7 @@ import os
 import json
 import logging
 import time
+import traceback
 import boto3
 from botocore.exceptions import ClientError
 from typing import Dict, List, Any, Generator, Tuple, Optional, Union
@@ -50,7 +51,7 @@ class BedrockClient:
                     inference_config: Dict[str, Any],
                     additional_model_fields: Dict[str, Any] = None) -> Generator:
         """
-        Sends messages to a model and streams the response.
+        Sends messages to a model and streams the response with enhanced logging.
         
         Args:
             model_id: The model ID to use
@@ -63,6 +64,39 @@ class BedrockClient:
             Stream object for processing response chunks
         """
         logger.info(f"Streaming messages with model {model_id}")
+        
+        # Log the full request details
+        logger.info(f"Inference config: {json.dumps(inference_config, default=str)}")
+        
+        # Log the system prompts in full
+        if system_prompts and len(system_prompts) > 0:
+            for i, prompt in enumerate(system_prompts):
+                logger.info(f"System prompt {i+1}: {json.dumps(prompt, default=str)}")
+        else:
+            logger.warning("No system prompts provided")
+        
+        # Log the messages being sent (truncate long messages for readability)
+        formatted_messages = []
+        for i, msg in enumerate(messages):
+            content = msg.get('content', '')
+            if isinstance(content, str) and len(content) > 200:
+                content_preview = content[:200] + "..."
+            elif isinstance(content, list):
+                content_preview = [
+                    {k: (v[:200] + "..." if isinstance(v, str) and len(v) > 200 else v) 
+                     for k, v in item.items()}
+                    for item in content
+                ]
+            else:
+                content_preview = content
+                
+            formatted_messages.append({
+                "index": i,
+                "role": msg.get('role', 'unknown'),
+                "content": content_preview
+            })
+        
+        logger.info(f"Messages being sent: {json.dumps(formatted_messages, default=str)}")
         
         # Ensure numeric parameters are properly converted to their respective types
         inference_config = self._convert_numeric_params(inference_config)
@@ -82,13 +116,14 @@ class BedrockClient:
                 formatted_system_prompts = self._format_system_prompts(system_prompts)
                 if formatted_system_prompts:
                     params['system'] = formatted_system_prompts
+                    logger.info(f"Formatted system prompts for Amazon: {json.dumps(formatted_system_prompts, default=str)}")
             
             # Add additional fields if provided
             if additional_model_fields:
                 params['additionalModelRequestFields'] = additional_model_fields
             
-            # Log the parameters for debugging
-            logger.info(f"Amazon model parameters: {json.dumps(params, default=str)}")
+            # Log the final parameters for debugging
+            logger.info(f"Amazon model final parameters: {json.dumps(params, default=str)}")
             
             # Call the converse_stream API
             response = self.client.converse_stream(**params)
@@ -108,6 +143,7 @@ class BedrockClient:
                 system_text = system_prompts[0].get('text', '')
                 if system_text:
                     request_body["system"] = system_text
+                    logger.info(f"Using system prompt for Claude: {system_text}")
             
             # Add top_p if provided
             if "topP" in inference_config:
@@ -117,8 +153,8 @@ class BedrockClient:
             if additional_model_fields:
                 request_body.update(additional_model_fields)
             
-            # Log the request body for debugging
-            logger.info(f"Claude model request body: {json.dumps(request_body, default=str)}")
+            # Log the final request body for debugging
+            logger.info(f"Claude model final request body: {json.dumps(request_body, default=str)}")
             
             # Call the invoke_model_with_response_stream API
             response = self.client.invoke_model_with_response_stream(
@@ -207,7 +243,7 @@ class BedrockClient:
 
     def parse_stream(self, stream, tracker=None) -> Generator[str, None, str]:
         """
-        Process streaming response from Bedrock.
+        Process streaming response from Bedrock with enhanced logging.
         
         Args:
             stream: Bedrock stream response
@@ -229,32 +265,16 @@ class BedrockClient:
         start_time = time.time()
         first_token_time = None
         
-        for event in stream:
-            # Handle different event types
-            if 'messageStart' in event:
-                logger.info(f"Role: {event['messageStart']['role']}")
+        logger.info("Starting to parse response stream")
+        
+        try:
+            for event in stream:
+                # Handle different event types
+                if 'messageStart' in event:
+                    logger.info(f"Role: {event['messageStart']['role']}")
 
-            if 'contentBlockDelta' in event:            
-                message = event['contentBlockDelta']['delta']['text']
-                # Record time of first token if not already set
-                if first_token_time is None:
-                    first_token_time = time.time()
-                    time_to_first_token = (first_token_time - start_time) * 1000
-                    logger.info(f"Time to first token: {time_to_first_token} ms")
-                    
-                    # Add to metrics
-                    if "metrics" not in metric_response:
-                        metric_response["metrics"] = {}
-                    metric_response["metrics"]["timeToFirstToken"] = time_to_first_token
-                
-                full_response += message
-                yield message  # return output so it can be rendered immediately
-
-            # Handle Claude-style chunks
-            elif 'chunk' in event:
-                chunk_obj = json.loads(event['chunk']['bytes'].decode())
-                if 'completion' in chunk_obj:
-                    message = chunk_obj['completion']
+                if 'contentBlockDelta' in event:            
+                    message = event['contentBlockDelta']['delta']['text']
                     # Record time of first token if not already set
                     if first_token_time is None:
                         first_token_time = time.time()
@@ -266,42 +286,80 @@ class BedrockClient:
                             metric_response["metrics"] = {}
                         metric_response["metrics"]["timeToFirstToken"] = time_to_first_token
                     
+                    # Log the message chunk (first 50 chars)
+                    logger.info(f"Received message chunk: {message[:50]}..." if len(message) > 50 else message)
+                    
                     full_response += message
                     yield message  # return output so it can be rendered immediately
 
-            if 'messageStop' in event:
-                logger.info(f"Stop reason: {event['messageStop']['stopReason']}")
+                # Handle Claude-style chunks
+                elif 'chunk' in event:
+                    chunk_obj = json.loads(event['chunk']['bytes'].decode())
+                    if 'completion' in chunk_obj:
+                        message = chunk_obj['completion']
+                        # Record time of first token if not already set
+                        if first_token_time is None:
+                            first_token_time = time.time()
+                            time_to_first_token = (first_token_time - start_time) * 1000
+                            logger.info(f"Time to first token: {time_to_first_token} ms")
+                            
+                            # Add to metrics
+                            if "metrics" not in metric_response:
+                                metric_response["metrics"] = {}
+                            metric_response["metrics"]["timeToFirstToken"] = time_to_first_token
+                        
+                        # Log the message chunk (first 50 chars)
+                        logger.info(f"Received Claude chunk: {message[:50]}..." if len(message) > 50 else message)
+                        
+                        full_response += message
+                        yield message  # return output so it can be rendered immediately
 
-            if 'metadata' in event:
-                metadata = event['metadata']
-                if 'usage' in metadata:
-                    logger.info("Token usage")
-                    logger.info(f"Input tokens: {metadata['usage']['inputTokens']}")
-                    logger.info(f"Output tokens: {metadata['usage']['outputTokens']}")
-                    logger.info(f"Total tokens: {metadata['usage']['totalTokens']}")
-                    metric_response["usage"] = metadata['usage']
-                if 'metrics' in event['metadata']:
-                    logger.info(f"Latency (Total Time for Response): {metadata['metrics']['latencyMs']} milliseconds")
-                    if "metrics" not in metric_response:
-                        metric_response["metrics"] = {}
-                    metric_response["metrics"]["latencyMs"] = metadata['metrics']['latencyMs']
-        
-        # Log the full response
-        logger.info(f"Full response: {full_response[:100]}...")
-        
-        # Send metrics to tracker if provided
-        if tracker:
-            # Track AWS converse metrics
-            tracker.track_bedrock_converse_metrics(metric_response)
+                if 'messageStop' in event:
+                    logger.info(f"Stop reason: {event['messageStop']['stopReason']}")
+
+                if 'metadata' in event:
+                    metadata = event['metadata']
+                    if 'usage' in metadata:
+                        logger.info("Token usage")
+                        logger.info(f"Input tokens: {metadata['usage']['inputTokens']}")
+                        logger.info(f"Output tokens: {metadata['usage']['outputTokens']}")
+                        logger.info(f"Total tokens: {metadata['usage']['totalTokens']}")
+                        metric_response["usage"] = metadata['usage']
+                    if 'metrics' in event['metadata']:
+                        logger.info(f"Latency (Total Time for Response): {metadata['metrics']['latencyMs']} milliseconds")
+                        if "metrics" not in metric_response:
+                            metric_response["metrics"] = {}
+                        metric_response["metrics"]["latencyMs"] = metadata['metrics']['latencyMs']
             
-            # Track success response
-            tracker.track_success()
+            # Log the full response
+            logger.info(f"Full response length: {len(full_response)}")
+            logger.info(f"Full response preview: {full_response[:200]}...")
             
-            # Track AI metrics individually to LaunchDarkly
-            if "metrics" in metric_response and "timeToFirstToken" in metric_response["metrics"]:
-                tracker.track_time_to_first_token(metric_response["metrics"]["timeToFirstToken"])
-        
-        return full_response
+            # Send metrics to tracker if provided
+            if tracker:
+                # Track AWS converse metrics
+                logger.info("Tracking metrics with LaunchDarkly tracker")
+                tracker.track_bedrock_converse_metrics(metric_response)
+                
+                # Track success response
+                tracker.track_success()
+                
+                # Track AI metrics individually to LaunchDarkly
+                if "metrics" in metric_response and "timeToFirstToken" in metric_response["metrics"]:
+                    tracker.track_time_to_first_token(metric_response["metrics"]["timeToFirstToken"])
+            
+            return full_response
+            
+        except Exception as e:
+            error_str = str(e)
+            logger.error(f"Error parsing stream: {error_str}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return what we have so far
+            if full_response:
+                return full_response
+            else:
+                return f"Error generating response: {error_str}"
 
 def create_bedrock_message(message_history: List[Dict[str, str]], current_prompt: str) -> List[Dict[str, Any]]:
     """

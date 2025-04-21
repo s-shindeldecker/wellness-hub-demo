@@ -9,6 +9,7 @@ sending feedback, and managing fallback configurations.
 import os
 import json
 import logging
+import traceback
 from typing import Dict, Any, Tuple, Optional
 
 # LaunchDarkly imports
@@ -40,7 +41,7 @@ class LaunchDarklyClient:
     
     def get_ai_config(self, user_context: Context, variables: Dict[str, Any]) -> Tuple[AIConfig, Any]:
         """
-        Get the AI configuration for a specific user context.
+        Get the AI configuration for a specific user context with enhanced logging.
         
         Args:
             user_context: LaunchDarkly user context
@@ -50,6 +51,10 @@ class LaunchDarklyClient:
             Tuple containing the AI config and a tracker object
         """
         try:
+            # Log the request for AI config
+            logger.info(f"Requesting AI config for user: {user_context.key}")
+            logger.info(f"Variables passed to AI config: {json.dumps(variables, default=str)}")
+            
             # Create a fallback configuration for when the LaunchDarkly service is unavailable
             fallback_value = self.get_fallback_config()
             
@@ -60,14 +65,36 @@ class LaunchDarklyClient:
                 fallback_value, 
                 variables
             )
-            logger.info("AI Config context updated")
+            logger.info("AI Config received from LaunchDarkly")
+            logger.info(f"AI Config enabled: {config.enabled}")
             
-            self.print_box("MODEL", vars(config.model))
-            self.print_box("MESSAGES", config.messages)
+            # Log model details
+            self.print_box("MODEL DETAILS", {
+                "name": config.model.name,
+                "parameters": config.model._parameters
+            })
+            
+            # Log all messages in the config
+            message_logs = []
+            if config.messages:
+                for i, msg in enumerate(config.messages):
+                    message_logs.append({
+                        "index": i,
+                        "role": msg.role,
+                        "content": msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+                    })
+            self.print_box("CONFIG MESSAGES", message_logs)
+            
+            # Log the full system prompt for verification
+            system_messages = [msg.content for msg in config.messages if msg.role == "system"]
+            if system_messages:
+                self.print_box("SYSTEM PROMPT (FULL)", system_messages[0])
             
             return config, tracker
         except Exception as e:
             logger.error(f"Error getting AI config: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.warning("Using fallback configuration")
             return self.get_fallback_config(), None
     
     def get_fallback_config(self) -> AIConfig:
